@@ -1,1 +1,2 @@
 # frappe -- https://github.com/frappe/frappe is installed via 'bench init'
+asn1crypto>=1.5         # CMS/PKCS#7 parsing for .xml.p7m e-invoice extraction
