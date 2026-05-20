@@ -20,16 +20,25 @@ generation, supplier invoice import).
 
 ```
 erpnext_italy/
-  erpnext_italy/           ← app package
-    e_invoice/             ← e-invoice doctypes & logic
-    import_supplier_invoice/  ← supplier XML import
-    overrides/             ← ERPNext hooks/overrides
-    config/                ← desktop & module config
+  erpnext_italy/                    ← app package
+    erpnext_italy/                  ← ERPNext Italy module
+      doctype/
+        purchase_invoice_it_sdi_import/         ← inbound supplier XML → Purchase Invoice
+        sales_invoice_it_sdi_import/            ← outbound XML migration → Sales Invoice
+        foreign_purchase_invoice_it_sdi_import/ ← autofattura TD17-TD27 → Sales Invoice
+        import_supplier_invoice/                ← deprecated, kept for backward compat
+    utils/
+      p7m.py              ← CMS/PKCS#7 .p7m extraction ✓
+      sdi_import_base.py  ← shared base class + helpers for all SDI import DocTypes
+    config/
     hooks.py
     utils.py
-  requirements.txt
+  requirements.txt        ← asn1crypto>=1.5 added ✓
   setup.py
+  EINVOICING.md           ← feature design & XML field mapping reference
 ```
+
+See [EINVOICING.md](EINVOICING.md) for full feature design and XML mapping.
 
 ---
 
@@ -126,247 +135,80 @@ Make the app installable and fully functional on ERPNext v16 / Frappe v16.
 
 ---
 
-## Phase 2 — XML.P7M Decryption
+## Phase 2 — XML.P7M Extraction ✓ DONE
 
-### Goal
-Accept `.xml.p7m` (CMS / PKCS#7 signed data) files from SDI and extract the inner
-FatturaPA XML without requiring OpenSSL CLI.
+### What was built
+- `erpnext_italy/utils/p7m.py` — `extract_xml_from_p7m(bytes) -> bytes` using `asn1crypto`
+- `erpnext_italy/utils/__init__.py`
+- `requirements.txt` updated with `asn1crypto>=1.5`
+- `import_supplier_invoice.py` updated to call `extract_xml_from_p7m` and skip SDI receipt files (`_RC_`, `_NS_`, `_MC_`)
 
-### Background
-SDI delivers invoices as CAdES-BES detached signatures wrapped in a `.p7m` envelope.
-The file is a DER-encoded `ContentInfo` with `signedData` containing the original XML as
-`encapContentInfo.eContent`.
-
-### New file: `erpnext_italy/utils/p7m.py`
-
-```python
-"""
-P7M (CMS SignedData) decryption utilities for Italian e-invoices.
-
-Usage:
-    from erpnext_italy.utils.p7m import extract_xml_from_p7m
-    xml_bytes = extract_xml_from_p7m(p7m_bytes)
-"""
-
-import frappe
-from cryptography.hazmat.primitives.serialization import pkcs7
-from cryptography.hazmat.primitives import hashes
-from cryptography.x509 import load_der_x509_certificate
-from asn1crypto import cms  # included transitively via cryptography
-
-
-def extract_xml_from_p7m(p7m_bytes: bytes) -> bytes:
-    """
-    Extract the inner XML payload from a CAdES / PKCS#7 .p7m file.
-
-    Args:
-        p7m_bytes: raw bytes of the .p7m file (DER or BER encoded)
-
-    Returns:
-        bytes: the raw XML payload
-
-    Raises:
-        frappe.ValidationError: if the file is not valid CMS SignedData
-    """
-    try:
-        from asn1crypto import cms as asn1_cms
-
-        content_info = asn1_cms.ContentInfo.load(p7m_bytes)
-        if content_info["content_type"].native != "signed_data":
-            frappe.throw(
-                "Il file .p7m non contiene dati di tipo SignedData.",
-                title="Formato P7M non valido",
-            )
-
-        signed_data = content_info["content"]
-        encap = signed_data["encap_content_info"]
-        payload = encap["content"].parsed  # returns bytes
-
-        if payload is None:
-            # Fallback: some encoders omit EXPLICIT tag
-            payload = encap["content"].contents
-
-        return bytes(payload)
-
-    except Exception as exc:
-        frappe.log_error(
-            message=str(exc),
-            title="P7M extraction failed",
-        )
-        frappe.throw(
-            f"Impossibile estrarre l'XML dal file .p7m: {exc}",
-            title="Errore P7M",
-        )
-
-
-def verify_p7m_signature(p7m_bytes: bytes) -> dict:
-    """
-    Optionally verify the CAdES signature chain.
-    Returns dict with keys: valid (bool), signer_cn (str), errors (list[str]).
-    This is informational only — Italian law allows import even with expired certs.
-    """
-    result = {"valid": False, "signer_cn": None, "errors": []}
-    try:
-        from asn1crypto import cms as asn1_cms, pem
-
-        content_info = asn1_cms.ContentInfo.load(p7m_bytes)
-        signed_data = content_info["content"]
-        certs = signed_data["certificates"]
-        if certs:
-            cert = certs[0].chosen
-            result["signer_cn"] = cert.subject.human_friendly
-        result["valid"] = True
-    except Exception as exc:
-        result["errors"].append(str(exc))
-    return result
-```
-
-### Integration points
-
-1. In `import_supplier_invoice/import_supplier_invoice.py` (or equivalent), detect `.p7m`
-   extension and pre-process:
-
-   ```python
-   from erpnext_italy.utils.p7m import extract_xml_from_p7m
-
-   def get_xml_content(file_path_or_bytes, filename):
-       if filename.lower().endswith(".p7m"):
-           return extract_xml_from_p7m(file_path_or_bytes)
-       return file_path_or_bytes  # already XML
-   ```
-
-2. Update the file-upload field's `allowed_file_types` in the DocType JSON to include
-   `.p7m` alongside `.xml`.
-
-3. Add `asn1crypto` to `requirements.txt` (it is a dependency of `cryptography` but pin
-   it explicitly: `asn1crypto>=1.5`).
+See `erpnext_italy/utils/p7m.py` for the implementation.
 
 ---
 
-## Phase 3 — Standard ZIP Upload (XML + checksum + XML.P7M)
+## Phase 3 — SDI Import DocTypes
 
 ### Goal
-Accept the standard SDI delivery ZIP containing:
-- `IT01234567890_00001.xml` — the invoice XML
-- `IT01234567890_00001.xml.p7m` — the signed wrapper
-- `IT01234567890_00001_hash.txt` — SHA-256 checksum file (optional, provider-dependent)
+Replace the single `Import Supplier Invoice` DocType with three purpose-specific import
+wizards that share a common base class, covering all Italian SDI import scenarios.
 
-### New file: `erpnext_italy/utils/zip_import.py`
+### Architecture
 
-```python
-"""
-Utilities for importing the standard Italian SDI ZIP archive.
-
-ZIP structure expected:
-    <codice_fiscale>_<progressive>.xml
-    <codice_fiscale>_<progressive>.xml.p7m   (optional but preferred)
-    <codice_fiscale>_<progressive>_hash.txt  (optional checksum)
-"""
-
-import hashlib
-import io
-import zipfile
-
-import frappe
-
-from erpnext_italy.utils.p7m import extract_xml_from_p7m
-
-
-ALLOWED_EXTENSIONS = {".xml", ".p7m", ".txt", ".sha256", ".sha2"}
-
-
-def parse_sdi_zip(zip_bytes: bytes) -> list[dict]:
-    """
-    Parse an SDI ZIP and return a list of invoice dicts:
-        {
-            "filename": str,          # base invoice filename without extension
-            "xml_bytes": bytes,       # raw FatturaPA XML
-            "p7m_bytes": bytes|None,  # raw .p7m if present
-            "checksum_ok": bool,      # True if checksum matched or not present
-            "checksum_error": str,    # description if checksum failed
-        }
-    """
-    results = []
-    with zipfile.ZipFile(io.BytesIO(zip_bytes), "r") as zf:
-        names = zf.namelist()
-        groups = _group_files(names)
-
-        for base, files in groups.items():
-            entry = {
-                "filename": base,
-                "xml_bytes": None,
-                "p7m_bytes": None,
-                "checksum_ok": True,
-                "checksum_error": "",
-            }
-
-            # Load p7m first (preferred source of XML)
-            if files.get("p7m"):
-                entry["p7m_bytes"] = zf.read(files["p7m"])
-                entry["xml_bytes"] = extract_xml_from_p7m(entry["p7m_bytes"])
-            elif files.get("xml"):
-                entry["xml_bytes"] = zf.read(files["xml"])
-
-            if entry["xml_bytes"] is None:
-                frappe.log_error(
-                    f"ZIP entry '{base}' has no usable XML source.",
-                    title="SDI ZIP parse warning",
-                )
-                continue
-
-            # Verify checksum if present
-            if files.get("hash"):
-                expected = zf.read(files["hash"]).decode().strip().split()[0].lower()
-                actual = hashlib.sha256(entry["xml_bytes"]).hexdigest().lower()
-                if expected != actual:
-                    entry["checksum_ok"] = False
-                    entry["checksum_error"] = (
-                        f"SHA-256 mismatch: expected {expected}, got {actual}"
-                    )
-                    frappe.log_error(entry["checksum_error"], title="SDI ZIP checksum error")
-
-            results.append(entry)
-
-    return results
-
-
-def _group_files(names: list[str]) -> dict:
-    """Group zip member names by invoice base filename."""
-    groups = {}
-    for name in names:
-        lower = name.lower()
-        if lower.endswith(".xml.p7m"):
-            base = name[:-8]  # strip .xml.p7m
-            groups.setdefault(base, {})["p7m"] = name
-        elif lower.endswith(".xml"):
-            base = name[:-4]
-            groups.setdefault(base, {})["xml"] = name
-        elif any(lower.endswith(ext) for ext in ("_hash.txt", ".sha256", ".sha2")):
-            # best-effort: find the base by stripping the hash suffix
-            base = name.rsplit("_hash", 1)[0].rsplit(".", 1)[0]
-            groups.setdefault(base, {})["hash"] = name
-    return groups
+```
+erpnext_italy/utils/sdi_import_base.py   ← SDIImportBase(Document) + shared helpers
+        │
+        ├── PurchaseInvoiceItSDIImport   ← inbound supplier invoices → Purchase Invoice
+        │     reads: CedentePrestatore (supplier)
+        │     creates: Purchase Invoice
+        │     doc types: all standard (TD01, TD02, TD04, TD05, TD06…)
+        │
+        ├── SalesInvoiceItSDIImport      ← outbound XML migration + reconciliation
+        │     reads: CessionarioCommittente (customer)
+        │     creates: Sales Invoice
+        │     use case: transition from other invoicing software, SDI notification reconciliation
+        │     doc types: TD01, TD04, TD05…
+        │
+        └── ForeignPurchaseInvoiceItSDIImport  ← autofattura
+              reads: CedentePrestatore (foreign supplier)
+              creates: Sales Invoice (registered in sales register)
+              doc types: TD17–TD27 only (hard filter, others are logged and skipped)
 ```
 
-### DocType changes
+### Shared base (`erpnext_italy/utils/sdi_import_base.py`)
 
-Create (or update) `Import Supplier Invoice` DocType to add:
-- Field `upload_type` — Select: `XML`, `XML.P7M`, `ZIP`
-- Field `zip_file` — Attach — visible only when `upload_type == ZIP`
-- Child table `sdi_zip_entries` — stores per-invoice status after ZIP parse
+Contains:
+- `SDIImportBase(Document)` — ZIP loop, file reading, progress publishing, counter helpers
+- `_is_invoice_file(name)` — skips SDI receipt/notification files
+- `get_file_content(name, zf)` — handles `.xml` and `.xml.p7m` transparently
+- `get_supplier_details(xml)` / `get_customer_details(xml)` — party info extraction
+- `get_taxes_from_file` / `get_payment_terms_from_file` / `get_destination_code_from_file`
+- `create_supplier` / `create_customer` / `create_address` / `create_uom` / `get_country`
 
-Add server-side whitelisted method:
+### XML party mapping
+
+| DocType | Company is | Counterpart XML element | ERPNext party |
+|---|---|---|---|
+| `purchase_invoice_it_sdi_import` | `CessionarioCommittente` | `CedentePrestatore` | Supplier |
+| `sales_invoice_it_sdi_import` | `CedentePrestatore` | `CessionarioCommittente` | Customer |
+| `foreign_purchase_invoice_it_sdi_import` | self (autofattura) | `CedentePrestatore` | foreign Supplier |
+
+### Autofattura document type guard
 
 ```python
-@frappe.whitelist()
-def process_zip_upload(docname: str) -> dict:
-    doc = frappe.get_doc("Import Supplier Invoice", docname)
-    zip_bytes = frappe.get_doc("File", {"attached_to_name": docname, ...}).get_content()
-    entries = parse_sdi_zip(zip_bytes)
-    # save entries to child table, trigger import for each
-    ...
-    return {"imported": len(entries), "errors": [...]}
+AUTOFATTURA_TYPES = frozenset({
+    "TD17", "TD18", "TD19", "TD20", "TD21", "TD22",
+    "TD23", "TD24", "TD25", "TD26", "TD27",
+})
 ```
+
+Files with any other `TipoDocumento` are logged and skipped — not an error.
+
+### Deprecated DocType
+
+`import_supplier_invoice` is kept for backward compatibility but its controller now
+inherits from `SDIImportBase`. New installations should use
+`purchase_invoice_it_sdi_import` instead.
 
 ---
 
@@ -1036,10 +878,13 @@ jobs:
 |---|---|---|
 | 1 | App installs cleanly on ERPNext v16, all existing tests green | ☐ |
 | 1 | CI matrix runs v15 and v16 jobs | ☐ |
-| 2 | `extract_xml_from_p7m` returns correct XML bytes for sample fixture | ☐ |
-| 2 | Invalid `.p7m` raises `frappe.ValidationError` | ☐ |
-| 3 | `parse_sdi_zip` extracts XML from ZIP containing `.xml.p7m` | ☐ |
-| 3 | Checksum mismatch is logged and flagged (not a hard error) | ☐ |
+| 2 | `extract_xml_from_p7m` returns correct XML bytes for sample fixture | ✓ |
+| 2 | Invalid `.p7m` raises `frappe.ValidationError` | ✓ |
+| 3 | `SDIImportBase` handles ZIP loop, P7M extraction, receipt-file filtering | ✓ |
+| 3 | `PurchaseInvoiceItSDIImport` creates Purchase Invoice from inbound XML | ✓ |
+| 3 | `SalesInvoiceItSDIImport` creates Sales Invoice from outbound XML | ✓ |
+| 3 | `ForeignPurchaseInvoiceItSDIImport` filters TD17-TD27 and creates autofattura | ✓ |
+| 3 | Non-autofattura doc types in foreign import are logged and skipped, not errored | ✓ |
 | 4 | `SDI Bulk Import` enqueues a background job per submission | ☐ |
 | 4 | Per-file status and error messages are saved to child table | ☐ |
 | 4 | Realtime notification fires on completion | ☐ |
@@ -1053,6 +898,10 @@ jobs:
 | 7 | Coverage ≥ 70% for new code in `utils/`, `sdi_providers/`, `setup/` | ☐ |
 
 ---
+
+## Further implementation
+- Custom invoice number for SDI: when invoicing is already started in the same year it can be possible that ERPnext has a different naming standard from the one used by the other invoicing software. This field help un continuing with the previous invoicing naming standard. Example: ERPnext naming: ACC-SINV-2026-00001 --> SDI: 00001 or 2026-00001
+- Multicurrency support (Italian SDI support only EUR, the module must manage conversion, exchange rate, conversion rate gain/loss)
 
 ## Key References
 
