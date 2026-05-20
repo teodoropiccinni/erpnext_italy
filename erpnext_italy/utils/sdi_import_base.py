@@ -9,18 +9,28 @@ Three DocTypes extend SDIImportBase:
 See EINVOICING.md for full feature design and XML field mapping.
 """
 
+import io
 import re
 import zipfile
 
 import dateutil.parser
+import erpnext
 import frappe
 from bs4 import BeautifulSoup as bs
 from frappe import _
 from frappe.model.document import Document
-from frappe.utils import flt, today
+from frappe.utils import flt, get_datetime_str, today
 from frappe.utils.data import format_datetime
+from frappe.utils.file_manager import save_file
 
 from erpnext_italy.utils.p7m import extract_xml_from_p7m
+
+# TipoDocumento codes that represent autofattura / reverse-charge self-invoices.
+# Used by ForeignPurchaseInvoiceItSDIImport and process_zip_bytes.
+AUTOFATTURA_TYPES = frozenset({
+    "TD17", "TD18", "TD19", "TD20", "TD21", "TD22",
+    "TD23", "TD24", "TD25", "TD26", "TD27",
+})
 
 
 # ---------------------------------------------------------------------------
@@ -130,6 +140,313 @@ class SDIImportBase(Document):
 			"import_invoice_update",
 			{"title": title, "message": message, "count": count, "total": total},
 		)
+
+
+# ---------------------------------------------------------------------------
+# Invoice document creation (used by DocTypes and process_zip_bytes)
+# ---------------------------------------------------------------------------
+
+def create_purchase_invoice_doc(supplier_name, file_name, args, import_doc_name):
+	"""Create and save a Purchase Invoice from parsed XML data. Returns the doc name or None."""
+	args = frappe._dict(args)
+	pi = frappe.get_doc({
+		"doctype": "Purchase Invoice",
+		"company": args.company,
+		"currency": erpnext.get_company_currency(args.company),
+		"naming_series": args.naming_series,
+		"supplier": supplier_name,
+		"is_return": args.get("return_invoice", 0),
+		"posting_date": today(),
+		"bill_no": args.bill_no,
+		"buying_price_list": args.buying_price_list,
+		"bill_date": args.bill_date,
+		"destination_code": args.destination_code,
+		"document_type": args.document_type,
+		"disable_rounded_total": 1,
+		"items": args["items"],
+		"taxes": args["taxes"],
+	})
+
+	try:
+		pi.set_missing_values()
+		pi.insert(ignore_mandatory=True)
+
+		if args.total_discount > 0:
+			pi.apply_discount_on = "Grand Total"
+			pi.discount_amount = args.total_discount
+			pi.save()
+
+		calc_total = sum(flt(t["payment_amount"]) for t in args.terms)
+		adj = flt(calc_total - flt(pi.grand_total))
+		pi.payment_schedule = []
+		for term in args.terms:
+			pi.append("payment_schedule", {
+				"mode_of_payment_code": term["mode_of_payment_code"],
+				"bank_account_iban": term["bank_account_iban"],
+				"due_date": term["due_date"],
+				"payment_amount": flt(term["payment_amount"]) - adj,
+			})
+			adj = 0
+		pi.imported_grand_total = calc_total
+		pi.save()
+		return pi.name
+
+	except Exception as e:
+		if import_doc_name:
+			frappe.db.set_value("Purchase Invoice It Sdi Import", import_doc_name, "status", "Error")
+		frappe.log_error(
+			message=e,
+			title="Create Purchase Invoice: {0} | File: {1}".format(args.bill_no, file_name),
+		)
+		return None
+
+
+def create_sales_invoice_doc(customer_name, file_name, args, import_doc_name):
+	"""Create and save a Sales Invoice from parsed XML data. Returns the doc name or None."""
+	args = frappe._dict(args)
+	si = frappe.get_doc({
+		"doctype": "Sales Invoice",
+		"company": args.company,
+		"currency": erpnext.get_company_currency(args.company),
+		"naming_series": args.naming_series,
+		"customer": customer_name,
+		"is_return": args.get("return_invoice", 0),
+		"posting_date": args.posting_date or today(),
+		"selling_price_list": args.selling_price_list,
+		"destination_code": args.destination_code,
+		"document_type": args.document_type,
+		"disable_rounded_total": 1,
+		"items": args["items"],
+		"taxes": args["taxes"],
+	})
+
+	try:
+		si.set_missing_values()
+		si.insert(ignore_mandatory=True)
+
+		if args.total_discount > 0:
+			si.apply_discount_on = "Grand Total"
+			si.discount_amount = args.total_discount
+			si.save()
+
+		si.save()
+		return si.name
+
+	except Exception as e:
+		if import_doc_name:
+			frappe.db.set_value("Sales Invoice It Sdi Import", import_doc_name, "status", "Error")
+		frappe.log_error(
+			message=e,
+			title="Create Sales Invoice: {0} | File: {1}".format(args.invoice_no, file_name),
+		)
+		return None
+
+
+def create_autofattura_doc(company, file_name, args, import_doc_name):
+	"""Create a Sales Invoice for autofattura (company self-invoices). Returns doc name or None."""
+	args = frappe._dict(args)
+	self_customer = (
+		frappe.db.get_value("Customer", {"customer_name": company}, "name")
+		or company
+	)
+
+	si = frappe.get_doc({
+		"doctype": "Sales Invoice",
+		"company": company,
+		"currency": erpnext.get_company_currency(company),
+		"naming_series": args.naming_series,
+		"customer": self_customer,
+		"posting_date": args.posting_date or today(),
+		"selling_price_list": args.selling_price_list,
+		"destination_code": args.destination_code,
+		"document_type": args.document_type,
+		"disable_rounded_total": 1,
+		"items": args["items"],
+		"taxes": args["taxes"],
+	})
+
+	try:
+		si.set_missing_values()
+		si.insert(ignore_mandatory=True)
+		si.save()
+		return si.name
+
+	except Exception as e:
+		if import_doc_name:
+			frappe.db.set_value(
+				"Foreign Purchase Invoice It Sdi Import", import_doc_name, "status", "Error"
+			)
+		frappe.log_error(
+			message=e,
+			title="Create Autofattura: {0} | File: {1}".format(args.bill_no, file_name),
+		)
+		return None
+
+
+# ---------------------------------------------------------------------------
+# Bulk ZIP processing — used by SDI Bulk Import
+# ---------------------------------------------------------------------------
+
+def process_zip_bytes(zip_bytes: bytes, import_type: str, config: dict) -> dict:
+	"""Process all invoice files in a ZIP and create ERPNext documents.
+
+	Args:
+		zip_bytes:   Raw bytes of a ZIP file (SDI delivery or manual upload).
+		import_type: One of "purchase", "sales", "autofattura".
+		config:      Dict with all required fields (company, invoice_series, item_code,
+		             tax_account, default_uom, and type-specific party/price list fields).
+
+	Returns:
+		{"file_count": int, "invoice_count": int, "errors": list[dict]}
+	"""
+	cfg = frappe._dict(config)
+	results = {"file_count": 0, "invoice_count": 0, "errors": []}
+
+	with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
+		for file_name in zf.namelist():
+			if not _is_invoice_file(file_name):
+				continue
+
+			content = get_file_content(file_name, zf)
+			if not content:
+				results["errors"].append({"file": file_name, "error": "Could not read file content"})
+				continue
+
+			file_content = bs(content, "xml")
+			results["file_count"] += 1
+
+			for line in file_content.find_all("DatiGeneraliDocumento"):
+				doc_type = line.TipoDocumento.text
+
+				if import_type == "autofattura" and doc_type not in AUTOFATTURA_TYPES:
+					frappe.log_error(
+						message="File {0}: TipoDocumento '{1}' skipped (not autofattura)".format(
+							file_name, doc_type
+						),
+						title="SDI Bulk Import: skipped non-autofattura document",
+					)
+					continue
+
+				invoices_args = {
+					"company": cfg.company,
+					"naming_series": cfg.invoice_series,
+					"document_type": doc_type,
+					"total_discount": 0,
+					"items": [],
+				}
+
+				try:
+					if import_type == "purchase":
+						invoices_args.update({
+							"bill_date": get_datetime_str(line.Data.text),
+							"bill_no": line.Numero.text,
+							"buying_price_list": cfg.default_buying_price_list,
+							"destination_code": get_destination_code_from_file(file_content),
+						})
+						_build_items(file_content, invoices_args, cfg.item_code, cfg.default_uom)
+						invoices_args["taxes"] = get_taxes_from_file(file_content, cfg.tax_account)
+						invoices_args["terms"] = get_payment_terms_from_file(file_content)
+						supp_dict = get_supplier_details(file_content)
+						supplier_name = create_supplier(cfg.supplier_group, supp_dict)
+						create_address("Supplier", supplier_name, supp_dict)
+						doc_name = create_purchase_invoice_doc(supplier_name, file_name, invoices_args, None)
+						if doc_name:
+							results["invoice_count"] += 1
+							save_file(file_name, content, "Purchase Invoice",
+								doc_name, folder=None, decode=False, is_private=0, df=None)
+
+					elif import_type == "sales":
+						invoices_args.update({
+							"posting_date": get_datetime_str(line.Data.text),
+							"invoice_no": line.Numero.text,
+							"selling_price_list": cfg.default_selling_price_list,
+							"destination_code": get_destination_code_from_file(file_content),
+						})
+						_build_items(file_content, invoices_args, cfg.item_code, cfg.default_uom)
+						invoices_args["taxes"] = get_taxes_from_file(file_content, cfg.tax_account)
+						invoices_args["terms"] = get_payment_terms_from_file(file_content)
+						cust_dict = get_customer_details(file_content)
+						customer_name = create_customer(cfg.customer_group, cust_dict)
+						create_address("Customer", customer_name, cust_dict)
+						doc_name = create_sales_invoice_doc(customer_name, file_name, invoices_args, None)
+						if doc_name:
+							results["invoice_count"] += 1
+							save_file(file_name, content, "Sales Invoice",
+								doc_name, folder=None, decode=False, is_private=0, df=None)
+
+					elif import_type == "autofattura":
+						invoices_args.update({
+							"posting_date": get_datetime_str(line.Data.text),
+							"bill_no": line.Numero.text,
+							"selling_price_list": cfg.default_selling_price_list,
+							"destination_code": get_destination_code_from_file(file_content),
+						})
+						_build_items(file_content, invoices_args, cfg.item_code, cfg.default_uom)
+						invoices_args["taxes"] = get_taxes_from_file(file_content, cfg.tax_account)
+						invoices_args["terms"] = get_payment_terms_from_file(file_content)
+						supp_dict = get_supplier_details(file_content)
+						supplier_name = create_supplier(cfg.supplier_group, supp_dict)
+						create_address("Supplier", supplier_name, supp_dict)
+						doc_name = create_autofattura_doc(cfg.company, file_name, invoices_args, None)
+						if doc_name:
+							results["invoice_count"] += 1
+							save_file(file_name, content, "Sales Invoice",
+								doc_name, folder=None, decode=False, is_private=0, df=None)
+
+				except Exception as e:
+					results["errors"].append({"file": file_name, "error": str(e)})
+					frappe.log_error(
+						message=e,
+						title="process_zip_bytes error: {0}".format(file_name),
+					)
+
+	return results
+
+
+def _build_items(file_content, invoices_args: dict, item_code: str, default_uom: str):
+	"""Standalone item-line parser (mirrors SDIImportBase.prepare_items_for_invoice)."""
+	qty = 1
+	rate = tax_rate = 0
+	uom = default_uom
+
+	for line in file_content.find_all("DettaglioLinee"):
+		if not (line.find("PrezzoUnitario") and line.find("PrezzoTotale")):
+			continue
+
+		rate = flt(line.PrezzoUnitario.text) or 0
+		line_total = flt(line.PrezzoTotale.text) or 0
+
+		if rate and flt(line_total) / rate != 1.0 and line.find("Quantita"):
+			qty = flt(line.Quantita.text) or 0
+			if line.find("UnitaMisura"):
+				uom = create_uom(line.UnitaMisura.text)
+
+		if rate < 0 and line_total < 0:
+			qty *= -1
+			invoices_args["return_invoice"] = 1
+
+		if line.find("AliquotaIVA"):
+			tax_rate = flt(line.AliquotaIVA.text)
+
+		line_str = re.sub(r'[^A-Za-z0-9]+', '-', line.Descrizione.text)
+		item_name = line_str[:140]
+
+		invoices_args["items"].append({
+			"item_code": item_code,
+			"item_name": item_name,
+			"description": line_str,
+			"qty": qty,
+			"uom": uom,
+			"rate": abs(rate),
+			"conversion_factor": 1.0,
+			"tax_rate": tax_rate,
+		})
+
+		for disc_line in line.find_all("ScontoMaggiorazione"):
+			if disc_line.find("Percentuale"):
+				invoices_args["total_discount"] += flt(
+					(flt(disc_line.Percentuale.text) / 100) * (rate * qty)
+				)
 
 
 # ---------------------------------------------------------------------------
