@@ -1,0 +1,207 @@
+{
+ "actions": [],
+ "creation": "2026-05-20 00:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "import_type",
+  "company",
+  "item_code",
+  "column_break_4",
+  "invoice_series",
+  "tax_account",
+  "party_section",
+  "supplier_group",
+  "customer_group",
+  "column_break_9",
+  "default_buying_price_list",
+  "default_selling_price_list",
+  "status_section",
+  "status",
+  "started_at",
+  "completed_at",
+  "column_break_15",
+  "total_files",
+  "processed_files",
+  "error_files",
+  "files_section",
+  "zip_files",
+  "actions_section",
+  "start_import"
+ ],
+ "fields": [
+  {
+   "fieldname": "import_type",
+   "fieldtype": "Select",
+   "label": "Import Type",
+   "options": "purchase\nsales\nautofattura",
+   "reqd": 1
+  },
+  {
+   "fieldname": "company",
+   "fieldtype": "Link",
+   "label": "Company",
+   "options": "Company",
+   "reqd": 1
+  },
+  {
+   "fieldname": "item_code",
+   "fieldtype": "Link",
+   "label": "Default Item Code",
+   "options": "Item",
+   "reqd": 1
+  },
+  {
+   "fieldname": "column_break_4",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "invoice_series",
+   "fieldtype": "Select",
+   "label": "Invoice Series",
+   "options": "ACC-PINV-.YYYY.-\nACC-SINV-.YYYY.-",
+   "reqd": 1
+  },
+  {
+   "fieldname": "tax_account",
+   "fieldtype": "Link",
+   "label": "Tax Account",
+   "options": "Account",
+   "reqd": 1
+  },
+  {
+   "fieldname": "party_section",
+   "fieldtype": "Section Break",
+   "label": "Party Defaults"
+  },
+  {
+   "depends_on": "eval:doc.import_type === 'purchase' || doc.import_type === 'autofattura'",
+   "fieldname": "supplier_group",
+   "fieldtype": "Link",
+   "label": "Supplier Group",
+   "options": "Supplier Group"
+  },
+  {
+   "depends_on": "eval:doc.import_type === 'sales'",
+   "fieldname": "customer_group",
+   "fieldtype": "Link",
+   "label": "Customer Group",
+   "options": "Customer Group"
+  },
+  {
+   "fieldname": "column_break_9",
+   "fieldtype": "Column Break"
+  },
+  {
+   "depends_on": "eval:doc.import_type === 'purchase'",
+   "fieldname": "default_buying_price_list",
+   "fieldtype": "Link",
+   "label": "Default Buying Price List",
+   "options": "Price List"
+  },
+  {
+   "depends_on": "eval:doc.import_type === 'sales' || doc.import_type === 'autofattura'",
+   "fieldname": "default_selling_price_list",
+   "fieldtype": "Link",
+   "label": "Default Selling Price List",
+   "options": "Price List"
+  },
+  {
+   "fieldname": "status_section",
+   "fieldtype": "Section Break",
+   "label": "Status"
+  },
+  {
+   "default": "Draft",
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "label": "Status",
+   "options": "Draft\nProcessing\nCompleted\nCompleted with Errors",
+   "read_only": 1
+  },
+  {
+   "fieldname": "started_at",
+   "fieldtype": "Datetime",
+   "label": "Started At",
+   "read_only": 1
+  },
+  {
+   "fieldname": "completed_at",
+   "fieldtype": "Datetime",
+   "label": "Completed At",
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_15",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "0",
+   "fieldname": "total_files",
+   "fieldtype": "Int",
+   "label": "Total Files",
+   "read_only": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "processed_files",
+   "fieldtype": "Int",
+   "label": "Processed Files",
+   "read_only": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "error_files",
+   "fieldtype": "Int",
+   "label": "Error Files",
+   "read_only": 1
+  },
+  {
+   "fieldname": "files_section",
+   "fieldtype": "Section Break",
+   "label": "ZIP Files"
+  },
+  {
+   "fieldname": "zip_files",
+   "fieldtype": "Table",
+   "label": "ZIP Files",
+   "options": "SDI Bulk Import File"
+  },
+  {
+   "depends_on": "eval:!doc.__islocal",
+   "fieldname": "actions_section",
+   "fieldtype": "Section Break",
+   "label": "Actions"
+  },
+  {
+   "depends_on": "eval:doc.status === 'Draft'",
+   "fieldname": "start_import",
+   "fieldtype": "Button",
+   "label": "Start Import",
+   "options": "start_import"
+  }
+ ],
+ "links": [],
+ "modified": "2026-05-20 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "ERPNext Italy",
+ "name": "SDI Bulk Import",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Accounts Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "track_changes": 1
+}
