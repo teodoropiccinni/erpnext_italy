@@ -1,11 +1,11 @@
 import frappe
-import erpnext
 from frappe import _
-from frappe.utils import flt, get_datetime_str, today
+from frappe.utils import get_datetime_str
 from frappe.utils.file_manager import save_file
 
 from erpnext_italy.utils.sdi_import_base import (
 	SDIImportBase,
+	create_purchase_invoice_doc,
 	get_supplier_details,
 	get_destination_code_from_file,
 	get_taxes_from_file,
@@ -44,63 +44,10 @@ class PurchaseInvoiceItSDIImport(SDIImportBase):
 
 			supplier_name = create_supplier(self.supplier_group, supp_dict)
 			create_address("Supplier", supplier_name, supp_dict)
-			pi_name = _create_purchase_invoice(supplier_name, file_name, invoices_args, self.name)
+			pi_name = create_purchase_invoice_doc(supplier_name, file_name, invoices_args, self.name)
 
 			self.file_count += 1
 			if pi_name:
 				self.invoice_count += 1
 				save_file(file_name, encoded_content, "Purchase Invoice",
 					pi_name, folder=None, decode=False, is_private=0, df=None)
-
-
-def _create_purchase_invoice(supplier_name, file_name, args, import_doc_name):
-	args = frappe._dict(args)
-	pi = frappe.get_doc({
-		"doctype": "Purchase Invoice",
-		"company": args.company,
-		"currency": erpnext.get_company_currency(args.company),
-		"naming_series": args.naming_series,
-		"supplier": supplier_name,
-		"is_return": args.get("return_invoice", 0),
-		"posting_date": today(),
-		"bill_no": args.bill_no,
-		"buying_price_list": args.buying_price_list,
-		"bill_date": args.bill_date,
-		"destination_code": args.destination_code,
-		"document_type": args.document_type,
-		"disable_rounded_total": 1,
-		"items": args["items"],
-		"taxes": args["taxes"],
-	})
-
-	try:
-		pi.set_missing_values()
-		pi.insert(ignore_mandatory=True)
-
-		if args.total_discount > 0:
-			pi.apply_discount_on = "Grand Total"
-			pi.discount_amount = args.total_discount
-			pi.save()
-
-		calc_total = sum(flt(t["payment_amount"]) for t in args.terms)
-		adj = flt(calc_total - flt(pi.grand_total))
-		pi.payment_schedule = []
-		for term in args.terms:
-			pi.append("payment_schedule", {
-				"mode_of_payment_code": term["mode_of_payment_code"],
-				"bank_account_iban": term["bank_account_iban"],
-				"due_date": term["due_date"],
-				"payment_amount": flt(term["payment_amount"]) - adj,
-			})
-			adj = 0
-		pi.imported_grand_total = calc_total
-		pi.save()
-		return pi.name
-
-	except Exception as e:
-		frappe.db.set_value("Purchase Invoice It Sdi Import", import_doc_name, "status", "Error")
-		frappe.log_error(
-			message=e,
-			title="Create Purchase Invoice: {0} | File: {1}".format(args.bill_no, file_name),
-		)
-		return None
