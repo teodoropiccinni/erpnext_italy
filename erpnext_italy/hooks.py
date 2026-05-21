@@ -132,7 +132,13 @@ doc_events = {
 # Scheduled Tasks
 # ---------------
 
-# scheduler_events = {
+scheduler_events = {
+	"cron": {
+		# Poll inbound invoices from active SDI providers every 30 min on weekdays
+		"*/30 7-20 * * 1-5": [
+			"erpnext_italy.sdi_providers.tasks.poll_inbound_invoices"
+		],
+	},
 # 	"all": [
 # 		"erpnext_italy.tasks.all"
 # 	],
@@ -148,7 +154,7 @@ doc_events = {
 # 	"monthly": [
 # 		"erpnext_italy.tasks.monthly"
 # 	],
-# }
+}
 
 # Testing
 # -------
