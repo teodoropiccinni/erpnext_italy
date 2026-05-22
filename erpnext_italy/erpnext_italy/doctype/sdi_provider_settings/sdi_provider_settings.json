@@ -1,0 +1,144 @@
+{
+ "actions": [],
+ "creation": "2026-05-20 00:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "provider",
+  "company",
+  "column_break_3",
+  "is_active",
+  "test_mode",
+  "connection_section",
+  "api_base_url",
+  "api_key",
+  "column_break_9",
+  "api_secret",
+  "webhook_secret",
+  "credentials_section",
+  "username",
+  "column_break_13",
+  "password",
+  "test_connection_section",
+  "test_connection"
+ ],
+ "fields": [
+  {
+   "fieldname": "provider",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Provider",
+   "options": "Aruba\nWolters Kluwer\nTeamSystem\nCustom",
+   "reqd": 1
+  },
+  {
+   "fieldname": "company",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Company",
+   "options": "Company",
+   "reqd": 1
+  },
+  {
+   "fieldname": "column_break_3",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "0",
+   "fieldname": "is_active",
+   "fieldtype": "Check",
+   "in_list_view": 1,
+   "label": "Active"
+  },
+  {
+   "default": "1",
+   "fieldname": "test_mode",
+   "fieldtype": "Check",
+   "label": "Test / Sandbox Mode"
+  },
+  {
+   "fieldname": "connection_section",
+   "fieldtype": "Section Break",
+   "label": "Connection"
+  },
+  {
+   "fieldname": "api_base_url",
+   "fieldtype": "Data",
+   "label": "API Base URL"
+  },
+  {
+   "fieldname": "api_key",
+   "fieldtype": "Password",
+   "label": "API Key"
+  },
+  {
+   "fieldname": "column_break_9",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "api_secret",
+   "fieldtype": "Password",
+   "label": "API Secret"
+  },
+  {
+   "fieldname": "webhook_secret",
+   "fieldtype": "Password",
+   "label": "Webhook Secret"
+  },
+  {
+   "fieldname": "credentials_section",
+   "fieldtype": "Section Break",
+   "label": "Username / Password"
+  },
+  {
+   "fieldname": "username",
+   "fieldtype": "Data",
+   "label": "Username"
+  },
+  {
+   "fieldname": "column_break_13",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "password",
+   "fieldtype": "Password",
+   "label": "Password"
+  },
+  {
+   "depends_on": "eval:!doc.__islocal",
+   "fieldname": "test_connection_section",
+   "fieldtype": "Section Break",
+   "label": "Test"
+  },
+  {
+   "depends_on": "eval:!doc.__islocal",
+   "fieldname": "test_connection",
+   "fieldtype": "Button",
+   "label": "Test Connection",
+   "options": "test_connection"
+  }
+ ],
+ "links": [],
+ "modified": "2026-05-20 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "ERPNext Italy",
+ "name": "SDI Provider Settings",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "track_changes": 1
+}
