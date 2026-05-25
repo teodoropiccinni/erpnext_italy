@@ -73,12 +73,12 @@ doctype_js = {
 # after_install = "erpnext_italy.install.after_install"
 
 after_install = "erpnext_italy.install.after_install"
-
+before_uninstall = "erpnext_italy.install.before_uninstall"
+after_migrate = "erpnext_italy.install.after_migrate"
 
 # Uninstallation
 # ------------
 
-# before_uninstall = "erpnext_italy.uninstall.before_uninstall"
 # after_uninstall = "erpnext_italy.uninstall.after_uninstall"
 
 # Desk Notifications

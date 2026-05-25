@@ -121,6 +121,11 @@ def make_custom_fields(update=True):
 				fetch_from="bank_account.swift_number", read_only=1),
 		],
 		"Sales Invoice": [
+			dict(fieldname='einvoice_status', label='Stato E-Fattura',
+				fieldtype='Select', insert_after='status', print_hide=1, read_only=1,
+				options='\nDa inviare\nInviata\nAccettata\nRifiutata'),
+			dict(fieldname='sdi_transmission_id', label='ID Trasmissione SDI',
+				fieldtype='Data', insert_after='einvoice_status', print_hide=1, read_only=1),
 			dict(fieldname='vat_collectability', label='VAT Collectability',
 				fieldtype='Select', insert_after='taxes_and_charges', print_hide=1,
 				options="\n".join(map(lambda x: frappe.safe_decode(x, encoding='utf-8'), vat_collectability_options)),
@@ -166,7 +171,10 @@ def make_custom_fields(update=True):
 				),
 			dict(fieldname='imported_grand_total', label='Imported Grand Total',
 				fieldtype='Data', insert_after='update_auto_repeat_reference', print_hide=1, read_only=1
-				)
+				),
+			dict(fieldname='sdi_import_id', label='SDI Import Reference',
+				fieldtype='Data', insert_after='imported_grand_total', print_hide=1, read_only=1
+				),
 		],
 		'Purchase Taxes and Charges': [
 			dict(fieldname='tax_rate', label='Tax Rate',
@@ -201,14 +209,22 @@ def setup_report():
 		)).insert()
 
 def add_permissions():
-	doctype = 'Import Supplier Invoice'
-	add_permission(doctype, 'All', 0)
+	_add_sdi_import_permissions('Purchase Invoice It Sdi Import', include_purchase_user=True)
+	_add_sdi_import_permissions('Sales Invoice It Sdi Import', include_purchase_user=False)
+	_add_sdi_import_permissions('Foreign Purchase Invoice It Sdi Import', include_purchase_user=False)
+	_add_sdi_import_permissions('SDI Bulk Import', include_purchase_user=False)
 
-	for role in ('Accounts Manager', 'Accounts User','Purchase User', 'Auditor'):
+
+def _add_sdi_import_permissions(doctype, include_purchase_user=False):
+	add_permission(doctype, 'All', 0)
+	roles = ['Accounts Manager', 'Accounts User']
+	if include_purchase_user:
+		roles.append('Purchase User')
+
+	for role in roles:
 		add_permission(doctype, role, 0)
 		update_permission_property(doctype, role, 0, 'print', 1)
 		update_permission_property(doctype, role, 0, 'report', 1)
-
 		if role in ('Accounts Manager', 'Accounts User'):
 			update_permission_property(doctype, role, 0, 'write', 1)
 			update_permission_property(doctype, role, 0, 'create', 1)
@@ -217,3 +233,68 @@ def add_permissions():
 	add_permission(doctype, 'Accounts Manager', 1)
 	update_permission_property(doctype, 'Accounts Manager', 1, 'write', 1)
 	update_permission_property(doctype, 'Accounts Manager', 1, 'create', 1)
+
+
+# ── Migrate (after bench migrate / bench update) ──────────────────────────────
+
+def after_migrate():
+	"""Run on every bench migrate. Safe to call multiple times."""
+	make_custom_fields(update=True)
+	add_permissions()
+	frappe.db.commit()
+
+
+# ── Uninstall (before bench uninstall-app) ────────────────────────────────────
+
+def before_uninstall():
+	"""Remove custom fields added by this app. Does NOT delete business data."""
+	_remove_custom_fields()
+	frappe.db.commit()
+
+
+def _remove_custom_fields():
+	fields_to_remove = {
+		'Company': [
+			'sb_e_invoicing', 'fiscal_regime', 'fiscal_code', 'vat_collectability',
+			'cb_e_invoicing1', 'registrar_office_province', 'registration_number',
+			'share_capital_amount', 'no_of_members', 'liquidation_state',
+		],
+		'Sales Taxes and Charges': ['tax_exemption_reason', 'tax_exemption_law'],
+		'Customer': [
+			'fiscal_code', 'recipient_code', 'pec',
+			'is_public_administration', 'first_name', 'last_name',
+		],
+		'Mode of Payment': ['mode_of_payment_code'],
+		'Payment Schedule': [
+			'mode_of_payment_code', 'bank_account', 'bank_account_name',
+			'bank_account_no', 'bank_account_iban', 'bank_account_swift_number',
+		],
+		'Sales Invoice': [
+			'einvoice_status', 'sdi_transmission_id', 'vat_collectability',
+			'sb_e_invoicing_reference', 'company_fiscal_code', 'company_fiscal_regime',
+			'cb_e_invoicing_reference', 'customer_fiscal_code', 'type_of_document',
+		],
+		'Purchase Invoice Item': ['tax_rate', 'tax_amount', 'total_amount'],
+		'Sales Order Item': ['tax_rate', 'tax_amount', 'total_amount'],
+		'Delivery Note Item': ['tax_rate', 'tax_amount', 'total_amount'],
+		'Sales Invoice Item': [
+			'tax_rate', 'tax_amount', 'total_amount',
+			'customer_po_details', 'customer_po_no', 'customer_po_clm_brk', 'customer_po_date',
+		],
+		'Quotation Item': ['tax_rate', 'tax_amount', 'total_amount'],
+		'Purchase Order Item': ['tax_rate', 'tax_amount', 'total_amount'],
+		'Purchase Receipt Item': ['tax_rate', 'tax_amount', 'total_amount'],
+		'Supplier Quotation Item': ['tax_rate', 'tax_amount', 'total_amount'],
+		'Address': ['country_code', 'state_code'],
+		'Purchase Invoice': [
+			'document_type', 'destination_code', 'imported_grand_total', 'sdi_import_id',
+		],
+		'Purchase Taxes and Charges': ['tax_rate'],
+		'Supplier': ['fiscal_code', 'fiscal_regime'],
+	}
+
+	for doctype, fieldnames in fields_to_remove.items():
+		for fieldname in fieldnames:
+			cf_name = f"{doctype}-{fieldname}"
+			if frappe.db.exists("Custom Field", cf_name):
+				frappe.delete_doc("Custom Field", cf_name, ignore_permissions=True)
