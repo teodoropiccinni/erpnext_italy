@@ -923,6 +923,17 @@ jobs:
 ## Further implementation
 - Custom invoice number for SDI: when invoicing is already started in the same year it can be possible that ERPnext has a different naming standard from the one used by the other invoicing software. This field help un continuing with the previous invoicing naming standard. Example: ERPnext naming: ACC-SINV-2026-00001 --> SDI: 00001 or 2026-00001
 - Multicurrency support (Italian SDI support only EUR, the module must manage conversion, exchange rate, conversion rate gain/loss)
+- **Improve support for e-invoice document types (TipoDocumento):** Each TD code has specific accounting requirements that the import and export flows should handle correctly. Key types to address:
+  - `TD01` — Fattura (standard invoice, currently default)
+  - `TD02` — Acconto/anticipo su fattura (down-payment invoice)
+  - `TD03` — Acconto/anticipo su parcella (down-payment on professional fee)
+  - `TD04` — Nota di credito (credit note → `is_return = 1`)
+  - `TD05` — Nota di debito (debit note)
+  - `TD06` — Parcella (professional fee invoice)
+  - `TD16` — Integrazione fattura reverse charge interno
+  - `TD17`–`TD27` — Autofattura / reverse charge (already filtered, see `AUTOFATTURA_TYPES`)
+  
+  Suggested approach: add a `_DOCUMENT_TYPE_HANDLERS` dispatch dict in `sdi_import_base.py` that maps each TD code to a function that sets the correct ERPNext flags (e.g. `is_return`, debit note fields, payment schedule behaviour). Add per-TD tests in `test_sdi_import_doctypes.py`.
 
 ## Key References
 
