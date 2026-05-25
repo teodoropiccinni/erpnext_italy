@@ -923,6 +923,71 @@ jobs:
 ## Further implementation
 - Custom invoice number for SDI: when invoicing is already started in the same year it can be possible that ERPnext has a different naming standard from the one used by the other invoicing software. This field help un continuing with the previous invoicing naming standard. Example: ERPnext naming: ACC-SINV-2026-00001 --> SDI: 00001 or 2026-00001
 - Multicurrency support (Italian SDI support only EUR, the module must manage conversion, exchange rate, conversion rate gain/loss)
+- **MP23 (PagoPA) missing from `mode_of_payment_codes`** in `erpnext_italy/__init__.py` — add `"MP23-PagoPA"` to the list and re-run `make_custom_fields` to push the updated Select options to Mode of Payment.
+
+- **Default Payment Terms Templates and Modes of Payment for each MP code:**
+
+  SDI supplies `<DataScadenzaPagamento>` (explicit due date) in each `DettaglioPagamento`.
+  When that field is absent, `get_payment_terms_from_file` falls back to `today()`.
+  A better fallback: look up a default Payment Terms Template keyed by MP code.
+
+  #### All MP codes accepted by SDI
+
+  | MP Code | Italian name | Immediate? | Suggested ERPNext Mode of Payment | Default Payment Terms Template |
+  |---------|-------------|:---------:|-----------------------------------|-------------------------------|
+  | MP01 | Contanti | ✓ | Cash | Immediato |
+  | MP02 | Assegno | — | Cheque | 30 Giorni DF |
+  | MP03 | Assegno circolare | ✓ | Bank Draft | Immediato |
+  | MP04 | Contanti presso Tesoreria | ✓ | Cash | Immediato |
+  | MP05 | Bonifico | — | Wire Transfer | 30 Giorni DF |
+  | MP06 | Vaglia cambiario | — | Money Order | 30 Giorni DF |
+  | MP07 | Bollettino bancario | — | Bank Bulletin | 30 Giorni DF |
+  | MP08 | Carta di pagamento | ✓ | Credit Card | Immediato |
+  | MP09 | RID *(obsolete → SEPA)* | — | Direct Debit | 30 Giorni DF |
+  | MP10 | RID utenze *(obsolete)* | — | Direct Debit | 30 Giorni DF |
+  | MP11 | RID veloce *(obsolete)* | — | Direct Debit | 30 Giorni DF |
+  | MP12 | RIBA | — | RIBA | 30 Giorni DF |
+  | MP13 | MAV | — | MAV | 30 Giorni DF |
+  | MP14 | Quietanza erario | ✓ | Treasury Receipt | Immediato |
+  | MP15 | Giroconto su conti speciali | — | Internal Transfer | 30 Giorni DF |
+  | MP16 | Domiciliazione bancaria | — | SEPA Direct Debit | 30 Giorni DF |
+  | MP17 | Domiciliazione postale | — | Postal Direct Debit | 30 Giorni DF |
+  | MP18 | Bollettino di c/c postale | — | Postal Bulletin | 30 Giorni DF |
+  | MP19 | SEPA Direct Debit | — | SEPA Direct Debit | 30 Giorni DF |
+  | MP20 | SEPA Direct Debit CORE | — | SEPA Direct Debit CORE | 30 Giorni DF |
+  | MP21 | SEPA Direct Debit B2B | — | SEPA Direct Debit B2B | 30 Giorni DF |
+  | MP22 | Trattenuta su somme già riscosse | — | Withholding | — |
+  | MP23 | PagoPA *(missing — add to `__init__.py`)* | — | PagoPA | 30 Giorni DF |
+
+  **DF** = *Data Fattura* (from invoice date). ERPNext: Due Date Based On = `Day(s) after invoice date`.
+
+  #### Standard Payment Terms Templates to seed in `after_install`
+
+  These are ERPNext *records* (Payment Terms Template doctype), not custom fields.
+
+  | Template name | Due days | Due date base | Used for |
+  |---|:---:|---|---|
+  | `Immediato` | 0 | Day(s) after invoice date | MP01, MP03, MP04, MP08, MP14 |
+  | `30 Giorni DF` | 30 | Day(s) after invoice date | MP02, MP05–MP07, MP09–MP13, MP15–MP21, MP23 |
+  | `60 Giorni DF` | 60 | Day(s) after invoice date | Extended B2B |
+  | `90 Giorni DF` | 90 | Day(s) after invoice date | Long B2B |
+  | `30 Giorni DFMF` | 30 | Day(s) after end of invoice month | Fine mese variant |
+  | `60 Giorni DFMF` | 60 | Day(s) after end of invoice month | Fine mese variant |
+
+  #### Implementation approach (no custom fields involved)
+
+  1. Add `"MP23-PagoPA"` to `mode_of_payment_codes` in `__init__.py`.
+  2. Seed the templates above from `_seed_payment_terms_templates()` called by `after_install` and `after_migrate` (idempotent — skip if template already exists).
+  3. Add `_MP_DEFAULT_PAYMENT_TEMPLATE` dict to `sdi_import_base.py`:
+     ```python
+     _MP_DEFAULT_PAYMENT_TEMPLATE = {
+         "MP01": "Immediato", "MP03": "Immediato",
+         "MP04": "Immediato", "MP08": "Immediato", "MP14": "Immediato",
+     }
+     _MP_DEFAULT_PAYMENT_TEMPLATE_FALLBACK = "30 Giorni DF"
+     ```
+  4. Update `get_payment_terms_from_file`: when `DataScadenzaPagamento` is absent, resolve the MP code to its template and call `frappe.db.get_value("Payment Terms Template", ...)` to get the actual due date instead of using `today()`.
+
 - **Improve support for e-invoice document types (TipoDocumento):** Each TD code has specific accounting requirements that the import and export flows should handle correctly. Key types to address:
   - `TD01` — Fattura (standard invoice, currently default)
   - `TD02` — Acconto/anticipo su fattura (down-payment invoice)
