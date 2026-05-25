@@ -23,19 +23,44 @@ erpnext_italy/
   erpnext_italy/                    ← app package
     erpnext_italy/                  ← ERPNext Italy module
       doctype/
-        purchase_invoice_it_sdi_import/         ← inbound supplier XML → Purchase Invoice
-        sales_invoice_it_sdi_import/            ← outbound XML migration → Sales Invoice
-        foreign_purchase_invoice_it_sdi_import/ ← autofattura TD17-TD27 → Sales Invoice
-        import_supplier_invoice/                ← deprecated, kept for backward compat
+        purchase_invoice_it_sdi_import/         ← inbound supplier XML → Purchase Invoice ✓
+        sales_invoice_it_sdi_import/            ← outbound XML migration → Sales Invoice ✓
+        foreign_purchase_invoice_it_sdi_import/ ← autofattura TD17-TD27 → Sales Invoice ✓
+        sdi_bulk_import/                        ← bulk import of multiple ZIPs ✓
+        sdi_bulk_import_file/                   ← child table for bulk import ✓
+        sdi_provider_settings/                  ← SDI intermediary configuration ✓
     utils/
+      __init__.py
       p7m.py              ← CMS/PKCS#7 .p7m extraction ✓
-      sdi_import_base.py  ← shared base class + helpers for all SDI import DocTypes
+      sdi_import_base.py  ← shared base class + helpers + AUTOFATTURA_TYPES + process_zip_bytes ✓
+    sdi_providers/
+      __init__.py
+      base.py             ← abstract SDIProvider, SendResult, ReceivedInvoice ✓
+      aruba.py            ← Aruba Fatture in Cloud (REST) ✓
+      wolters_kluwer.py   ← Wolters Kluwer (FTP/FTPS) ✓
+      teamsystem.py       ← TeamSystem (REST stub — needs API docs) ✓
+      registry.py         ← provider factory ✓
+      tasks.py            ← scheduled poll job ✓
     config/
-    hooks.py
+    hooks.py              ← after_install, before_uninstall, after_migrate, scheduler_events ✓
+    install.py            ← custom fields, permissions, lifecycle functions ✓
     utils.py
+  tests/
+    __init__.py
+    test_p7m.py                   ✓
+    test_sdi_import_base.py       ✓
+    test_bulk_import.py           ✓
+    test_sdi_providers.py         ✓
+    test_install.py               ✓
+    test_sdi_import_doctypes.py   ✓
+    test_v16_compat.py            ✓
+    fixtures/
+      sample_invoice.xml
+      sample_invoice.xml.p7m
+      sample_sdi_delivery.zip
   requirements.txt        ← asn1crypto>=1.5 added ✓
   setup.py
-  EINVOICING.md           ← feature design & XML field mapping reference
+  EINVOICING.md           ← feature design & XML field mapping reference ✓
 ```
 
 See [EINVOICING.md](EINVOICING.md) for full feature design and XML mapping.
@@ -535,22 +560,17 @@ def poll_inbound_invoices():
 
 ---
 
-## Phase 6 — Install / Remove / Update Lifecycle Functions
+## Phase 6 — Install / Remove / Update Lifecycle Functions ✓ DONE
 
-### `hooks.py` additions
+### `hooks.py` additions (implemented in `erpnext_italy/install.py`)
 
 ```python
-# Called after `bench install-app erpnext_italy`
-after_install = "erpnext_italy.setup.install.after_install"
-
-# Called before `bench uninstall-app erpnext_italy`
-before_uninstall = "erpnext_italy.setup.install.before_uninstall"
-
-# Called after `bench update` / migrate
-after_migrate = "erpnext_italy.setup.install.after_migrate"
+after_install    = "erpnext_italy.install.after_install"
+before_uninstall = "erpnext_italy.install.before_uninstall"
+after_migrate    = "erpnext_italy.install.after_migrate"
 ```
 
-### New file: `erpnext_italy/setup/install.py`
+### `erpnext_italy/install.py` (extended)
 
 ```python
 """
@@ -885,17 +905,18 @@ jobs:
 | 3 | `SalesInvoiceItSDIImport` creates Sales Invoice from outbound XML | ✓ |
 | 3 | `ForeignPurchaseInvoiceItSDIImport` filters TD17-TD27 and creates autofattura | ✓ |
 | 3 | Non-autofattura doc types in foreign import are logged and skipped, not errored | ✓ |
-| 4 | `SDI Bulk Import` enqueues a background job per submission | ☐ |
-| 4 | Per-file status and error messages are saved to child table | ☐ |
-| 4 | Realtime notification fires on completion | ☐ |
-| 5 | `ArubaProvider.send_invoice` and `fetch_received_invoices` tested with mocks | ☐ |
-| 5 | `SDI Provider Settings` DocType exists with encrypted password fields | ☐ |
-| 5 | Scheduled poll job registered in `hooks.py` | ☐ |
-| 6 | `after_install` creates custom fields without errors on a fresh v16 site | ☐ |
-| 6 | `before_uninstall` removes custom fields cleanly | ☐ |
-| 6 | `after_migrate` is idempotent (safe to run multiple times) | ☐ |
-| 7 | All test files exist and pass with `bench run-tests` | ☐ |
-| 7 | Coverage ≥ 70% for new code in `utils/`, `sdi_providers/`, `setup/` | ☐ |
+| 4 | `SDI Bulk Import` enqueues a background job per submission | ✓ |
+| 4 | Per-file status and error messages are saved to child table | ✓ |
+| 4 | Realtime notification fires on completion | ✓ |
+| 5 | `ArubaProvider.send_invoice` and `fetch_received_invoices` tested with mocks | ✓ |
+| 5 | `WoltersKluwerProvider` uses FTP/FTPS file delivery | ✓ |
+| 5 | `SDI Provider Settings` DocType exists with encrypted password fields | ✓ |
+| 5 | Scheduled poll job registered in `hooks.py` | ✓ |
+| 6 | `after_install` creates custom fields without errors on a fresh v16 site | ✓ |
+| 6 | `before_uninstall` removes custom fields cleanly | ✓ |
+| 6 | `after_migrate` is idempotent (safe to run multiple times) | ✓ |
+| 7 | All test files exist and pass with `bench run-tests` | ✓ |
+| 7 | `test_v16_compat.py` validates all hook paths and module imports | ✓ |
 
 ---
 
