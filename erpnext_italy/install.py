@@ -27,6 +27,14 @@ def make_custom_fields(update=True):
 			print_hide=1, hidden=1, read_only=1, options="currency")
 	]
 
+	pricing_rule_item_field = [
+		dict(fieldname='custom_pricing_rule', label='Pricing Rule',
+			fieldtype='Link', options='Pricing Rule',
+			insert_after='discount_percentage', print_hide=1,
+			in_list_view=1,
+			description=_('Apply a specific pricing rule discount to this line'))
+	]
+
 	customer_po_fields = [
 		dict(fieldname='customer_po_details', label='Customer PO',
 			fieldtype='Section Break', insert_after='image'),
@@ -148,10 +156,10 @@ def make_custom_fields(update=True):
 				options='\nTD01\nTD02\nTD03\nTD04\nTD05\nTD06\nTD16\nTD17\nTD18\nTD19\nTD20\nTD21\nTD22\nTD23\nTD24\nTD25\nTD26\nTD27'),
 		],
 		'Purchase Invoice Item': invoice_item_fields,
-		'Sales Order Item': invoice_item_fields,
+		'Sales Order Item': invoice_item_fields + pricing_rule_item_field,
 		'Delivery Note Item': invoice_item_fields,
-		'Sales Invoice Item': invoice_item_fields + customer_po_fields,
-		'Quotation Item': invoice_item_fields,
+		'Sales Invoice Item': invoice_item_fields + pricing_rule_item_field + customer_po_fields,
+		'Quotation Item': invoice_item_fields + pricing_rule_item_field,
 		'Purchase Order Item': invoice_item_fields,
 		'Purchase Receipt Item': invoice_item_fields,
 		'Supplier Quotation Item': invoice_item_fields,
@@ -275,13 +283,13 @@ def _remove_custom_fields():
 			'cb_e_invoicing_reference', 'customer_fiscal_code', 'type_of_document',
 		],
 		'Purchase Invoice Item': ['tax_rate', 'tax_amount', 'total_amount'],
-		'Sales Order Item': ['tax_rate', 'tax_amount', 'total_amount'],
+		'Sales Order Item': ['tax_rate', 'tax_amount', 'total_amount', 'custom_pricing_rule'],
 		'Delivery Note Item': ['tax_rate', 'tax_amount', 'total_amount'],
 		'Sales Invoice Item': [
-			'tax_rate', 'tax_amount', 'total_amount',
+			'tax_rate', 'tax_amount', 'total_amount', 'custom_pricing_rule',
 			'customer_po_details', 'customer_po_no', 'customer_po_clm_brk', 'customer_po_date',
 		],
-		'Quotation Item': ['tax_rate', 'tax_amount', 'total_amount'],
+		'Quotation Item': ['tax_rate', 'tax_amount', 'total_amount', 'custom_pricing_rule'],
 		'Purchase Order Item': ['tax_rate', 'tax_amount', 'total_amount'],
 		'Purchase Receipt Item': ['tax_rate', 'tax_amount', 'total_amount'],
 		'Supplier Quotation Item': ['tax_rate', 'tax_amount', 'total_amount'],
