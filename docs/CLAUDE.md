@@ -1009,3 +1009,94 @@ jobs:
 - [asn1crypto docs](https://github.com/wbond/asn1crypto)
 - [cryptography.io — PKCS7](https://cryptography.io/en/latest/hazmat/primitives/asymmetric/serialization/#pkcs7)
 - [frappe/erpnext_italy upstream](https://github.com/frappe/erpnext_italy)
+
+
+---
+
+# Address Synchronization
+
+BusinessEntity does **not** own addresses.
+
+Addresses continue to use the standard ERPNext `Address` DocType and are linked through Dynamic Links.
+
+Whenever a Customer or Supplier is linked to a BusinessEntity, all linked addresses must remain synchronized.
+
+## Rules
+
+### Customer → Supplier
+
+If an Address is linked to a Customer and the corresponding Supplier exists, the same Address must automatically be linked to the Supplier.
+
+Example:
+
+```
+BusinessEntity
+    │
+    ├── Customer: CUST-0001
+    └── Supplier: SUPP-0001
+
+Address
+    ├── Customer (CUST-0001)
+    └── Supplier (SUPP-0001)
+```
+
+No duplicate Address documents should be created.
+
+The same Address record must simply contain two Dynamic Links:
+
+- Customer
+- Supplier
+
+---
+
+### Supplier → Customer
+
+The synchronization must also work in the opposite direction.
+
+If an Address is linked to the Supplier, the same Address must automatically be linked to the corresponding Customer.
+
+---
+
+### Address Updates
+
+When an Address document is modified, the changes are immediately available to both Customer and Supplier because they reference the same Address document.
+
+No synchronization of address fields is required.
+
+---
+
+### Address Removal
+
+If an Address is removed from the Customer:
+
+- remove only the Customer Dynamic Link;
+- keep the Supplier Dynamic Link if the Supplier still uses the Address.
+
+Likewise, removing an Address from the Supplier must only remove the Supplier Dynamic Link.
+
+The Address document itself should only be deleted when no Dynamic Links remain.
+
+---
+
+# Contact Synchronization
+
+The same strategy applies to the standard ERPNext `Contact` DocType.
+
+A Contact should never be duplicated.
+
+Instead, the same Contact document should contain multiple Dynamic Links.
+
+Example:
+
+```
+BusinessEntity
+    │
+    ├── Customer
+    └── Supplier
+
+Contact
+    ├── Customer
+    └── Supplier
+```
+
+Whenever a Contact is linked to one side (Customer or Supplier), the corresponding Dynamic Link must automatically be created for the other side.
